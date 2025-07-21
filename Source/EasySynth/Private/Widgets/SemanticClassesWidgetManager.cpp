@@ -8,7 +8,7 @@
 #include "Widgets/Layout/SUniformGridPanel.h"
 
 #include "EasySynth.h"
-#include "TextureStyles\TextureMappingAsset.h"
+#include "TextureStyles/TextureMappingAsset.h"
 
 
 #define LOCTEXT_NAMESPACE "FSemanticClassesWidgetManager"
