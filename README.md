@@ -60,7 +60,7 @@ This method only works with engines built from source code.
 
 ## How to use
 
-Check out our [demonstration video](https://vimeo.com/655432464) showcasing everything from setting up the project to rendering output images.
+Check out our [demonstration video](https://youtu.be/UYNNCYeZM-Y) showcasing everything from setting up the project to rendering output images.
 
 ### Setup
 
