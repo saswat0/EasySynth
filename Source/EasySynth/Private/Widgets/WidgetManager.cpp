@@ -28,7 +28,8 @@ const FIntPoint FWidgetManager::DefaultOutputImageResolution(1920, 1080);
 
 FWidgetManager::FWidgetManager() :
 	OutputImageResolution(DefaultOutputImageResolution),
-	OutputDirectory(FPathUtils::DefaultRenderingOutputPath())
+	OutputDirectory(FPathUtils::DefaultRenderingOutputPath()),
+	CurrentSequenceIndex(-1)
 {
 	// Create the texture style manager and add it to the root to avoid garbage collection
 	TextureStyleManager = NewObject<UTextureStyleManager>();
@@ -198,18 +199,14 @@ TSharedRef<SDockTab> FWidgetManager::OnSpawnPluginTab(const FSpawnTabArgs& Spawn
 			.Padding(2)
 			[
 				SNew(STextBlock)
-				.Text(LOCTEXT("PickSequencerSectionTitle", "Pick sequencer"))
+				.Text(LOCTEXT("PickSequencesFolderSectionTitle", "Pick sequences folder"))
 			]
 			+SScrollBox::Slot()
 			.Padding(2)
 			[
-				SNew(SObjectPropertyEntryBox)
-				.AllowedClass(ULevelSequence::StaticClass())
-				.ObjectPath_Raw(this, &FWidgetManager::GetSequencerPath)
-				.OnObjectChanged_Raw(this, &FWidgetManager::OnSequencerSelected)
-				.AllowClear(true)
-				.DisplayUseSelected(true)
-				.DisplayBrowse(true)
+				SNew(SDirectoryPicker)
+				.Directory(SelectedSequencesFolder)
+				.OnDirectoryChanged_Raw(this, &FWidgetManager::OnSequencesFolderChanged)
 			]
 			+SScrollBox::Slot()
 			.Padding(2)
@@ -412,13 +409,9 @@ void FWidgetManager::OnTextureStyleComboBoxSelectionChanged(
 	}
 }
 
-FString FWidgetManager::GetSequencerPath() const
+void FWidgetManager::OnSequencesFolderChanged(const FString& Directory)
 {
-	if (LevelSequenceAssetData.IsValid())
-	{
-		return LevelSequenceAssetData.ObjectPath.ToString();
-	}
-	return "";
+	SelectedSequencesFolder = Directory;
 }
 
 ECheckBoxState FWidgetManager::RenderTargetsCheckedState(const FRendererTargetOptions::TargetType TargetType) const
@@ -500,32 +493,93 @@ FString FWidgetManager::GetCustomPPMaterialPath() const
 bool FWidgetManager::GetIsRenderImagesEnabled() const
 {
 	return
-		LevelSequenceAssetData.GetAsset() != nullptr &&
+		!SelectedSequencesFolder.IsEmpty() &&
 		SequenceRendererTargets.AnyOptionSelected() &&
 		SequenceRenderer != nullptr && !SequenceRenderer->IsRendering();
 }
 
 FReply FWidgetManager::OnRenderImagesClicked()
 {
-	// Make a copy of the SequenceRendererTargets to avoid
-	// them being changed through the UI during rendering
+	// Scan folder for level sequences
+	SequencesToRender.Empty();
+	CurrentSequenceIndex = -1;
+	
+	IFileManager& FileManager = IFileManager::Get();
+	TArray<FString> FoundFiles;
+	FString SearchPath = SelectedSequencesFolder / TEXT("*.uasset");
+	FileManager.FindFiles(FoundFiles, *SearchPath, true, false);
+	
+	// Filter for LevelSequence assets
+	for (const FString& FileName : FoundFiles)
+	{
+		FString FullPath = SelectedSequencesFolder / FileName;
+		FString PackageName;
+		if (FPackageName::TryConvertFilenameToLongPackageName(FullPath, PackageName))
+		{
+			FAssetData AssetData = FAssetData(FSoftObjectPath(PackageName + TEXT(".") + FPaths::GetBaseFilename(FileName)));
+			UObject* Asset = AssetData.GetAsset();
+			if (Asset && Asset->IsA(ULevelSequence::StaticClass()))
+			{
+				SequencesToRender.Add(AssetData);
+			}
+		}
+	}
+	
+	if (SequencesToRender.Num() == 0)
+	{
+		const FText MessageBoxTitle = LOCTEXT("NoSequencesFoundTitle", "No Sequences Found");
+		FMessageDialog::Open(
+			EAppMsgType::Ok,
+			LOCTEXT("NoSequencesFoundMessage", "No level sequence assets found in the selected folder."),
+			&MessageBoxTitle);
+		return FReply::Handled();
+	}
+	
+	// Store base output directory
+	BaseOutputDirectory = OutputDirectory;
+	
+	// Start rendering first sequence
+	CurrentSequenceIndex = 0;
+	RenderCurrentSequence();
+	
+	// Save widget options
+	SaveWidgetOptionStates();
+	
+	return FReply::Handled();
+}
+
+void FWidgetManager::RenderCurrentSequence()
+{
+	if (CurrentSequenceIndex < 0 || CurrentSequenceIndex >= SequencesToRender.Num())
+	{
+		return;
+	}
+	
+	FAssetData& CurrentSequence = SequencesToRender[CurrentSequenceIndex];
+	
+	// Create subfolder for this sequence
+	FString SequenceName = CurrentSequence.AssetName.ToString();
+	FString SequenceOutputDir = BaseOutputDirectory / SequenceName;
+	
+	UE_LOG(LogEasySynth, Log, TEXT("Rendering sequence %d/%d: %s"), 
+		CurrentSequenceIndex + 1, SequencesToRender.Num(), *SequenceName);
+	
 	if (!SequenceRenderer->RenderSequence(
-		LevelSequenceAssetData,
+		CurrentSequence,
 		SequenceRendererTargets,
 		OutputImageResolution,
-		OutputDirectory))
+		SequenceOutputDir))
 	{
 		const FText MessageBoxTitle = LOCTEXT("StartRenderingErrorMessageBoxTitle", "Could not start rendering");
 		FMessageDialog::Open(
 			EAppMsgType::Ok,
 			FText::FromString(SequenceRenderer->GetErrorMessage()),
 			&MessageBoxTitle);
+		
+		// Reset batch rendering state
+		SequencesToRender.Empty();
+		CurrentSequenceIndex = -1;
 	}
-
-	// Save the current widget options
-	SaveWidgetOptionStates();
-
-	return FReply::Handled();
 }
 
 void FWidgetManager::OnSemanticClassesUpdated()
@@ -554,19 +608,59 @@ void FWidgetManager::OnRenderingFinished(bool bSuccess)
 {
 	if (bSuccess)
 	{
-		const FText MessageBoxTitle = LOCTEXT("SuccessfulRenderingMessageBoxTitle", "Successful rendering");
-		FMessageDialog::Open(
-			EAppMsgType::Ok,
-			LOCTEXT("SuccessfulRenderingMessageBoxText", "Rendering finished successfully"),
-			&MessageBoxTitle);
+		// Check if we're in batch rendering mode
+		if (CurrentSequenceIndex >= 0 && CurrentSequenceIndex < SequencesToRender.Num())
+		{
+			CurrentSequenceIndex++;
+			
+			// Check if there are more sequences to render
+			if (CurrentSequenceIndex < SequencesToRender.Num())
+			{
+				// Render next sequence
+				RenderCurrentSequence();
+				return;
+			}
+			else
+			{
+				// All sequences rendered successfully
+				const FText MessageBoxTitle = LOCTEXT("BatchRenderingCompleteTitle", "Batch Rendering Complete");
+				FMessageDialog::Open(
+					EAppMsgType::Ok,
+					FText::Format(LOCTEXT("BatchRenderingCompleteMessage", "Successfully rendered {0} sequences."),
+						FText::AsNumber(SequencesToRender.Num())),
+					&MessageBoxTitle);
+				
+				// Reset batch rendering state
+				SequencesToRender.Empty();
+				CurrentSequenceIndex = -1;
+			}
+		}
+		else
+		{
+			// Single sequence rendering (shouldn't happen now, but keep for safety)
+			const FText MessageBoxTitle = LOCTEXT("SuccessfulRenderingMessageBoxTitle", "Successful rendering");
+			FMessageDialog::Open(
+				EAppMsgType::Ok,
+				LOCTEXT("SuccessfulRenderingMessageBoxText", "Rendering finished successfully"),
+				&MessageBoxTitle);
+		}
 	}
 	else
 	{
+		// Error occurred
 		const FText MessageBoxTitle = LOCTEXT("RenderingErrorMessageBoxTitle", "Rendering failed");
 		FMessageDialog::Open(
 			EAppMsgType::Ok,
-			FText::FromString(SequenceRenderer->GetErrorMessage()),
+			FText::FromString(FString::Printf(TEXT("Failed on sequence: %s\n\nError: %s"),
+				CurrentSequenceIndex >= 0 && CurrentSequenceIndex < SequencesToRender.Num() 
+					? *SequencesToRender[CurrentSequenceIndex].AssetName.ToString() 
+					: TEXT("Unknown"),
+				*SequenceRenderer->GetErrorMessage())),
 			&MessageBoxTitle);
+		
+		// Reset batch rendering state
+		SequencesToRender.Empty();
+		CurrentSequenceIndex = -1;
 	}
 }
 
@@ -578,7 +672,7 @@ void FWidgetManager::LoadWidgetOptionStates()
 	if (WidgetStateAsset != nullptr)
 	{
 		// Initialize the widget members using loaded options
-		LevelSequenceAssetData = FAssetData(WidgetStateAsset->LevelSequenceAssetPath.TryLoad());
+		SelectedSequencesFolder = TEXT("");
 		SequenceRendererTargets.SetExportCameraPoses(WidgetStateAsset->bCameraPosesSelected);
 		SequenceRendererTargets.SetSelectedTarget(FRendererTargetOptions::COLOR_IMAGE, WidgetStateAsset->bColorImagesSelected);
 		SequenceRendererTargets.SetSelectedTarget(FRendererTargetOptions::DEPTH_IMAGE, WidgetStateAsset->bDepthImagesSelected);
@@ -637,7 +731,7 @@ void FWidgetManager::SaveWidgetOptionStates()
 	}
 
 	// Update asset values
-	WidgetStateAsset->LevelSequenceAssetPath = LevelSequenceAssetData.ToSoftObjectPath();
+	WidgetStateAsset->LevelSequenceAssetPath = FSoftObjectPath();
 	WidgetStateAsset->bCameraPosesSelected = SequenceRendererTargets.ExportCameraPoses();
 	WidgetStateAsset->bColorImagesSelected = SequenceRendererTargets.TargetSelected(FRendererTargetOptions::COLOR_IMAGE);
 	WidgetStateAsset->bDepthImagesSelected = SequenceRendererTargets.TargetSelected(FRendererTargetOptions::DEPTH_IMAGE);

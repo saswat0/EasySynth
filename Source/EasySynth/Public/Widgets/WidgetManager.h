@@ -41,11 +41,8 @@ private:
 	/** Callback function handling the choosing of the texture style inside the combo box */
 	void OnTextureStyleComboBoxSelectionChanged(TSharedPtr<FString> StringItem, ESelectInfo::Type SelectInfo);
 
-	/** Callback function handling the update of the selected sequencer */
-	void OnSequencerSelected(const FAssetData& AssetData) { LevelSequenceAssetData = AssetData; }
-
-	/** Callback function providing the path to the selected sequencer asset */
-	FString GetSequencerPath() const;
+	/** Callback function handling the update of the selected sequences folder */
+	void OnSequencesFolderChanged(const FString& Directory);
 
 	/** Checks whether renderer target check box should be checked */
 	ECheckBoxState RenderTargetsCheckedState(const FRendererTargetOptions::TargetType TargetType) const;
@@ -76,6 +73,9 @@ private:
 
 	/** Handles render images button click */
 	FReply OnRenderImagesClicked();
+
+	/** Renders the current sequence in the batch */
+	void RenderCurrentSequence();
 
 	/** Handles the semantic classes updated event */
 	void OnSemanticClassesUpdated();
@@ -114,8 +114,17 @@ private:
 	/** FStrings output image format names referenced by the combo box */
 	TArray<TSharedPtr<FString>> OutputFormatNames;
 
-	/** Currently selected sequencer asset data */
-	FAssetData LevelSequenceAssetData;
+	/** Currently selected sequences folder */
+	FString SelectedSequencesFolder;
+
+	/** Array of sequences to render in batch */
+	TArray<FAssetData> SequencesToRender;
+
+	/** Current sequence being rendered in batch */
+	int32 CurrentSequenceIndex;
+
+	/** Base output directory (before sequence subfolder) */
+	FString BaseOutputDirectory;
 
 	/** Widget's copy of the chosen renderer targets set */
 	FRendererTargetOptions SequenceRendererTargets;
