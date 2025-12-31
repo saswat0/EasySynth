@@ -500,28 +500,36 @@ bool FWidgetManager::GetIsRenderImagesEnabled() const
 
 FReply FWidgetManager::OnRenderImagesClicked()
 {
-	// Scan folder for level sequences
+	// Scan folder for level sequences using Asset Registry
 	SequencesToRender.Empty();
 	CurrentSequenceIndex = -1;
 	
-	IFileManager& FileManager = IFileManager::Get();
-	TArray<FString> FoundFiles;
-	FString SearchPath = SelectedSequencesFolder / TEXT("*.uasset");
-	FileManager.FindFiles(FoundFiles, *SearchPath, true, false);
-	
-	// Filter for LevelSequence assets
-	for (const FString& FileName : FoundFiles)
+	// Convert folder path to package path
+	FString PackagePath;
+	if (!FPackageName::TryConvertFilenameToLongPackageName(SelectedSequencesFolder, PackagePath))
 	{
-		FString FullPath = SelectedSequencesFolder / FileName;
-		FString PackageName;
-		if (FPackageName::TryConvertFilenameToLongPackageName(FullPath, PackageName))
+		const FText MessageBoxTitle = LOCTEXT("InvalidFolderTitle", "Invalid Folder");
+		FMessageDialog::Open(
+			EAppMsgType::Ok,
+			LOCTEXT("InvalidFolderMessage", "Selected folder is not a valid content folder."),
+			&MessageBoxTitle);
+		return FReply::Handled();
+	}
+	
+	// Get asset registry
+	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
+	IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
+	
+	// Find all assets in the folder
+	TArray<FAssetData> AssetDataList;
+	AssetRegistry.GetAssetsByPath(FName(*PackagePath), AssetDataList, false);
+	
+	// Filter for LevelSequence assets only
+	for (const FAssetData& AssetData : AssetDataList)
+	{
+		if (AssetData.AssetClassPath.GetAssetName() == FName("LevelSequence"))
 		{
-			FAssetData AssetData = FAssetData(FSoftObjectPath(PackageName + TEXT(".") + FPaths::GetBaseFilename(FileName)));
-			UObject* Asset = AssetData.GetAsset();
-			if (Asset && Asset->IsA(ULevelSequence::StaticClass()))
-			{
-				SequencesToRender.Add(AssetData);
-			}
+			SequencesToRender.Add(AssetData);
 		}
 	}
 	
