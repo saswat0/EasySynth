@@ -629,21 +629,14 @@ void FWidgetManager::OnRenderingFinished(bool bSuccess)
 				UE_LOG(LogEasySynth, Log, TEXT("Cleaning up memory before sequence %d/%d"), 
 					CurrentSequenceIndex + 1, SequencesToRender.Num());
 				
-				// Force garbage collection to free up memory
-				CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+				// Collect garbage to free memory
+				GEngine->ForceGarbageCollection(true);
 				
-				// Flush rendering commands to clear GPU memory
-				FlushRenderingCommands();
+				// Small delay before next render
+				FPlatformProcess::Sleep(1.0f);
 				
-				// Add delay before next sequnece
-				const float CleanupDelaySeconds = 2.0f;
-				const bool bLoop = false;
-				FTimerHandle CleanupTimerHandle;
-				GEditor->GetEditorWorldContext().World()->GetTimerManager().SetTimer(
-					CleanupTimerHandle,
-					[this]() { RenderCurrentSequence(); },
-					CleanupDelaySeconds,
-					bLoop);
+				// Render next sequence
+				RenderCurrentSequence();
 				return;
 			}
 			else
