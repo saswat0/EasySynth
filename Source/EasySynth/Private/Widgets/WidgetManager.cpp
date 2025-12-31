@@ -16,6 +16,7 @@
 #include "EasySynth.h"
 #include "Widgets/WidgetStateAsset.h"
 
+#include "HAL/PlatformProcess.h"
 
 const FString FWidgetManager::TextureStyleColorName(TEXT("Original color textures"));
 const FString FWidgetManager::TextureStyleSemanticName(TEXT("Semantic color textures"));
@@ -624,8 +625,25 @@ void FWidgetManager::OnRenderingFinished(bool bSuccess)
 			// Check if there are more sequences to render
 			if (CurrentSequenceIndex < SequencesToRender.Num())
 			{
-				// Render next sequence
-				RenderCurrentSequence();
+				// Force memory cleanup before next sequence
+				UE_LOG(LogEasySynth, Log, TEXT("Cleaning up memory before sequence %d/%d"), 
+					CurrentSequenceIndex + 1, SequencesToRender.Num());
+				
+				// Force garbage collection to free up memory
+				CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+				
+				// Flush rendering commands to clear GPU memory
+				FlushRenderingCommands();
+				
+				// Add delay before next sequnece
+				const float CleanupDelaySeconds = 2.0f;
+				const bool bLoop = false;
+				FTimerHandle CleanupTimerHandle;
+				GEditor->GetEditorWorldContext().World()->GetTimerManager().SetTimer(
+					CleanupTimerHandle,
+					[this]() { RenderCurrentSequence(); },
+					CleanupDelaySeconds,
+					bLoop);
 				return;
 			}
 			else
