@@ -521,9 +521,9 @@ FReply FWidgetManager::OnRenderImagesClicked()
 	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
 	IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
 	
-	// Find all assets in the folder
+	// Find all assets in the folder recursively
 	TArray<FAssetData> AssetDataList;
-	AssetRegistry.GetAssetsByPath(FName(*PackagePath), AssetDataList, false);
+	AssetRegistry.GetAssetsByPath(FName(*PackagePath), AssetDataList, true);
 	
 	// Filter for LevelSequence assets only
 	for (const FAssetData& AssetData : AssetDataList)
@@ -534,6 +534,11 @@ FReply FWidgetManager::OnRenderImagesClicked()
 		}
 	}
 	
+	// Sort sequences to preserve hierarchy
+	SequencesToRender.Sort([](const FAssetData& A, const FAssetData& B) {
+		return A.PackageName.ToString() < B.PackageName.ToString();
+	});
+	
 	if (SequencesToRender.Num() == 0)
 	{
 		const FText MessageBoxTitle = LOCTEXT("NoSequencesFoundTitle", "No Sequences Found");
@@ -543,6 +548,8 @@ FReply FWidgetManager::OnRenderImagesClicked()
 			&MessageBoxTitle);
 		return FReply::Handled();
 	}
+	
+	UE_LOG(LogEasySynth, Log, TEXT("Found %d sequences to render"), SequencesToRender.Num());
 	
 	// Store base output directory
 	BaseOutputDirectory = OutputDirectory;
@@ -566,12 +573,39 @@ void FWidgetManager::RenderCurrentSequence()
 	
 	FAssetData& CurrentSequence = SequencesToRender[CurrentSequenceIndex];
 	
-	// Create subfolder for this sequence
-	FString SequenceName = CurrentSequence.AssetName.ToString();
-	FString SequenceOutputDir = BaseOutputDirectory / SequenceName;
+	// Get the relative path from the selected folder
+	FString SequencePackagePath = CurrentSequence.PackageName.ToString();
+	
+	// Convert selected folder to package path
+	FString BaseFolderPackagePath;
+	FPackageName::TryConvertFilenameToLongPackageName(SelectedSequencesFolder, BaseFolderPackagePath);
+	
+	// Calculate relative path
+	FString RelativePath;
+	if (SequencePackagePath.StartsWith(BaseFolderPackagePath))
+	{
+		// Remove base path to get relative path
+		RelativePath = SequencePackagePath.RightChop(BaseFolderPackagePath.Len());
+		// Remove leading slash if present
+		if (RelativePath.StartsWith(TEXT("/")))
+		{
+			RelativePath = RelativePath.RightChop(1);
+		}
+	}
+	else
+	{
+		// Fallback to just the asset name
+		RelativePath = CurrentSequence.AssetName.ToString();
+	}
+	
+	// Replace package path separators with filesystem separators
+	RelativePath = RelativePath.Replace(TEXT("/"), TEXT("\\"));
+	
+	// Create output directory preserving hierarchy
+	FString SequenceOutputDir = BaseOutputDirectory / RelativePath;
 	
 	UE_LOG(LogEasySynth, Log, TEXT("Rendering sequence %d/%d: %s"), 
-		CurrentSequenceIndex + 1, SequencesToRender.Num(), *SequenceName);
+		CurrentSequenceIndex + 1, SequencesToRender.Num(), *RelativePath);
 	
 	if (!SequenceRenderer->RenderSequence(
 		CurrentSequence,
